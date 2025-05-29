@@ -1,69 +1,112 @@
 // server.js
 const express = require('express');
 const multer = require('multer');
-const { PDFDocument } = require('pdf-lib');
+const cors = require('cors');
 const fs = require('fs');
 const path = require('path');
-const cors = require('cors');
+const { PDFDocument } = require('pdf-lib');
+const { fromPath } = require('pdf2pic');
+const libre = require('libreoffice-convert');
+const { PDFImage } = require('pdf-image');
+const sharp = require('sharp');
 
 const app = express();
+app.use(cors());
+app.use(express.json());
 const upload = multer({ dest: 'uploads/' });
 
-app.use(cors());
-app.use(express.static('public')); // Serve frontend files if needed
-origin: 'https://merge-f4im.onrender.com', // أو ضع رابط موقع الـ frontend فقط
+const PORT = process.env.PORT || 3000;
+
+// Utility function: Convert DOCX to PDF
+const convertToPDF = (inputPath) => {
+  return new Promise((resolve, reject) => {
+    const outputPath = inputPath + '.pdf';
+    fs.readFile(inputPath, (err, data) => {
+      if (err) return reject(err);
+      libre.convert(data, '.pdf', undefined, (err, done) => {
+        if (err) return reject(err);
+        fs.writeFile(outputPath, done, (err) => {
+          if (err) return reject(err);
+          resolve(outputPath);
+        });
+      });
+    });
+  });
+};
+
+// Utility function: Convert image to PDF
+const imageToPDF = async (imagePath) => {
+  const pdfDoc = await PDFDocument.create();
+  const imageBytes = await fs.promises.readFile(imagePath);
+  const extension = path.extname(imagePath).toLowerCase();
+  let image;
+
+  if (extension === '.jpg' || extension === '.jpeg') {
+    image = await pdfDoc.embedJpg(imageBytes);
+  } else if (extension === '.png') {
+    image = await pdfDoc.embedPng(imageBytes);
+  } else {
+    throw new Error('Unsupported image format');
+  }
+
+  const page = pdfDoc.addPage([image.width, image.height]);
+  page.drawImage(image, { x: 0, y: 0, width: image.width, height: image.height });
+
+  const pdfBytes = await pdfDoc.save();
+  const outputPath = imagePath + '.pdf';
+  await fs.promises.writeFile(outputPath, pdfBytes);
+  return outputPath;
+};
+
 app.post('/merge', upload.array('files'), async (req, res) => {
   try {
     const files = req.files;
-    const mergedPdf = await PDFDocument.create();
+    const pdfBuffers = [];
 
     for (const file of files) {
       const ext = path.extname(file.originalname).toLowerCase();
+      let pdfPath;
 
       if (ext === '.pdf') {
-        const pdfBytes = fs.readFileSync(file.path);
-        const pdf = await PDFDocument.load(pdfBytes);
-        const copiedPages = await mergedPdf.copyPages(pdf, pdf.getPageIndices());
-        copiedPages.forEach(page => mergedPdf.addPage(page));
+        pdfPath = file.path;
+      } else if (ext === '.docx' || ext === '.doc') {
+        pdfPath = await convertToPDF(file.path);
+      } else if (ext === '.jpg' || ext === '.jpeg' || ext === '.png') {
+        pdfPath = await imageToPDF(file.path);
       } else {
-        // For images (jpg, jpeg, png)
-        const imgBytes = fs.readFileSync(file.path);
-        let img;
-        if (ext === '.jpg' || ext === '.jpeg') {
-          img = await mergedPdf.embedJpg(imgBytes);
-        } else if (ext === '.png') {
-          img = await mergedPdf.embedPng(imgBytes);
-        } else {
-          // Skip unsupported files
-          continue;
-        }
-
-        const page = mergedPdf.addPage([img.width, img.height]);
-        page.drawImage(img, { x: 0, y: 0, width: img.width, height: img.height });
+        return res.status(400).send('Unsupported file format: ' + file.originalname);
       }
 
-      fs.unlinkSync(file.path); // Cleanup
+      const buffer = await fs.promises.readFile(pdfPath);
+      pdfBuffers.push(buffer);
+    }
+
+    // Merge all PDF buffers
+    const mergedPdf = await PDFDocument.create();
+    for (const buffer of pdfBuffers) {
+      const pdf = await PDFDocument.load(buffer);
+      const copiedPages = await mergedPdf.copyPages(pdf, pdf.getPageIndices());
+      copiedPages.forEach((page) => mergedPdf.addPage(page));
     }
 
     const mergedPdfBytes = await mergedPdf.save();
-    res.set({
-      'Content-Type': 'application/pdf',
-      'Content-Disposition': 'attachment; filename=merged.pdf',
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', 'attachment; filename=merged.pdf');
+    res.send(Buffer.from(mergedPdfBytes));
+
+    // Cleanup
+    files.forEach(file => fs.unlink(file.path, () => {}));
+    pdfBuffers.forEach((buffer, index) => {
+      const tempPath = files[index].path + '.pdf';
+      if (fs.existsSync(tempPath)) fs.unlink(tempPath, () => {});
     });
-    res.send(mergedPdfBytes);
+
   } catch (error) {
     console.error(error);
-    res.status(500).send('Failed to merge files.');
+    res.status(500).send('Failed to merge files');
   }
 });
 
-// Health check
-app.get('/', (req, res) => {
-  res.send('Server is running 🚀');
-});
-
-// Dynamic port for Render
-const port = process.env.PORT || 3000;
-app.listen(port, () => {
-  console.log(`Server listening on port ${port}`);
+app.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
 });
