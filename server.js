@@ -1,3 +1,21 @@
+import express from 'express';
+import multer from 'multer';
+import cors from 'cors';
+import fs from 'fs';
+import path from 'path';
+import { PDFDocument } from 'pdf-lib';
+import { fromPath } from 'pdf2pic';
+import libre from 'libreoffice-convert';
+import { fileURLToPath } from 'url';
+import sharp from 'sharp';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+const app = express();
+app.use(cors());
+app.use(express.json());
+const upload = multer({ dest: 'uploads/' });
 // server.js
 const express = require('express');
 const multer = require('multer');
