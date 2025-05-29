@@ -11,7 +11,7 @@ const upload = multer({ dest: 'uploads/' });
 
 app.use(cors());
 app.use(express.static('public')); // Serve frontend files if needed
-
+origin: 'https://merge-f4im.onrender.com', // أو ضع رابط موقع الـ frontend فقط
 app.post('/merge', upload.array('files'), async (req, res) => {
   try {
     const files = req.files;
